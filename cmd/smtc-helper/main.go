@@ -329,6 +329,13 @@ type smtcState struct {
 	tlFac   uintptr // ActivationFactory for TimelineProperties
 
 	tasks chan func()
+
+	// last track text: CopyFromFileAsync clears text metadata, so every
+	// thumbnail update must re-apply it (the app sends track and cover as
+	// separate commands, seconds apart)
+	lastTitle  string
+	lastArtist string
+	lastAlbum  string
 }
 
 func (st *smtcState) schedule(f func()) {
@@ -602,19 +609,25 @@ func (st *smtcState) applyThumbnail(coverPath string) {
 	}
 }
 
+// putText (re)applies the cached track text to the music properties.
+func (st *smtcState) putText() {
+	if st.music != 0 {
+		st.putStr(st.music, musicSlotTitlePut, st.lastTitle)
+		if st.music2 != 0 {
+			st.putStr(st.music2, music2SlotAlbumTitlePut, st.lastAlbum)
+		} else {
+			st.putStr(st.music, musicSlotAlbumPut, st.lastAlbum)
+		}
+		st.putStr(st.music, musicSlotArtistPut, st.lastArtist)
+	}
+}
+
 func (st *smtcState) track(title, artist, album, coverPath string) {
+	st.lastTitle, st.lastArtist, st.lastAlbum = title, artist, album
 	// Thumbnail FIRST: CopyFromFileAsync clears previously set text
 	// metadata, so the title/artist puts must come after it.
 	st.applyThumbnail(coverPath)
-	if st.music != 0 {
-		st.putStr(st.music, musicSlotTitlePut, title)
-		if st.music2 != 0 {
-			st.putStr(st.music2, music2SlotAlbumTitlePut, album)
-		} else {
-			st.putStr(st.music, musicSlotAlbumPut, album)
-		}
-		st.putStr(st.music, musicSlotArtistPut, artist)
-	}
+	st.putText()
 	if st.updater != 0 {
 		callV(st.updater, updSlotUpdate)
 	}
@@ -622,6 +635,7 @@ func (st *smtcState) track(title, artist, album, coverPath string) {
 
 func (st *smtcState) cover(coverPath string) {
 	st.applyThumbnail(coverPath)
+	st.putText() // CopyFromFileAsync cleared the track text; restore it
 	if st.updater != 0 {
 		callV(st.updater, updSlotUpdate)
 	}
