@@ -22,8 +22,6 @@ import (
 	"gioui.org/widget"
 	"gioui.org/widget/material"
 
-	"math/rand"
-
 	"ytm-client/internal/cover"
 	"ytm-client/internal/extract"
 	"ytm-client/internal/history"
@@ -31,6 +29,7 @@ import (
 	"ytm-client/internal/lyricswin"
 	"ytm-client/internal/player"
 	"ytm-client/internal/prefs"
+	"ytm-client/internal/recommend"
 	"ytm-client/internal/smtc"
 	"ytm-client/internal/vinylwin"
 	"ytm-client/internal/ytm"
@@ -124,13 +123,16 @@ type appUI struct {
 	lastEndedAt  time.Time
 
 	// persistent listening history + the Home tab built from it
-	hstore   *history.Store
-	hits     []ytm.Track // recently listened, newest first
-	picks    []ytm.Track // "next from those": radio-derived, deduped
-	homeBusy bool        // a recommendation refresh is in flight
-	homeRows []widget.Clickable
-	homePlus []widget.Clickable
-	hlist    widget.List
+	hstore         *history.Store
+	rstore         *recommend.Store // radio cache behind the recommendation engine
+	hits           []ytm.Track      // recently listened, newest first
+	picks          []ytm.Track      // "for you": radio-derived, ranked
+	homeBusy       bool             // a recommendation refresh is in flight
+	homeRows       []widget.Clickable
+	homePlus       []widget.Clickable
+	homeMarq       []homeMarq  // per-tile marquee states (title, artist)
+	homeMarqActive atomic.Bool // any marquee scrolled on the last frame
+	hlist          widget.List
 
 	// settings (gear at the rail's bottom)
 	gearBtn  widget.Clickable
@@ -176,6 +178,7 @@ func newAppUI() *appUI {
 		smtcCmds:   make(chan smtc.Button, 8),
 	}
 	ui.hstore = history.Load()
+	ui.rstore = recommend.Open()
 	ui.hlist = widget.List{List: layout.List{Axis: layout.Vertical}}
 
 	// settings
@@ -570,11 +573,11 @@ func (ui *appUI) topUpQueue(seedID string, need int) {
 	ui.mu.Unlock()
 }
 
-// refreshHome rebuilds the Home tab: the recent-listens section straight
-// from the persistent history, and a "next from those" section fetched
-// by seeding the radio (related-tracks) on a random sample of listens,
-// deduped against everything already shown. Safe to call concurrently;
-// runs at most one refresh at a time.
+// refreshHome rebuilds the Home tab: the recently-listened tiles straight
+// from the persistent history, and the "For you" picks from the
+// recommendation engine (seeded radio with a 24h on-disk cache, ranked by
+// cross-seed consensus). Safe to call concurrently; runs at most one
+// refresh at a time.
 func (ui *appUI) refreshHome() {
 	ui.mu.Lock()
 	if ui.homeBusy {
@@ -600,7 +603,7 @@ func (ui *appUI) refreshHome() {
 		return
 	}
 
-	// recently listened: distinct tracks, newest first
+	// recently listened: distinct tracks, newest first (tiles)
 	seen := map[string]bool{}
 	var recent []ytm.Track
 	for _, e := range listens {
@@ -610,118 +613,136 @@ func (ui *appUI) refreshHome() {
 		seen[e.VideoID] = true
 		recent = append(recent, e.Track)
 	}
-	if len(recent) > 8 {
-		recent = recent[:8]
+	if len(recent) > 10 {
+		recent = recent[:10]
 	}
 
-	// fresh picks: radio-next from up to three random recent listens
-	seeds := append([]ytm.Track(nil), recent...)
-	if len(seeds) > 6 {
-		seeds = seeds[:6]
-	}
-	rand.Shuffle(len(seeds), func(i, j int) { seeds[i], seeds[j] = seeds[j], seeds[i] })
-	var picks []ytm.Track
-	for _, seed := range seeds {
-		if len(picks) >= 12 {
-			break
-		}
-		tracks, err := ytm.Autoplay(seed.VideoID)
-		if err != nil {
-			continue
-		}
-		for _, t := range tracks {
-			if len(picks) >= 12 {
-				break
-			}
-			if t.VideoID == "" || seen[t.VideoID] {
-				continue
-			}
-			seen[t.VideoID] = true
-			picks = append(picks, t)
-		}
-	}
+	// ranked picks from the engine; the radio cache makes this free
+	// unless seeds are stale or missing
+	picks := ui.rstore.Refresh(listens, func(seedID string) ([]ytm.Track, error) {
+		return ytm.Autoplay(seedID)
+	}, time.Now())
 
 	ui.mu.Lock()
 	ui.hits, ui.picks = recent, picks
 	ui.mu.Unlock()
 }
 
-// home flats: row layout of the Home list — section headers interleaved
-// with track rows over the combined hits + picks slices.
-func homeRowCount(nHits, nPicks int) int {
-	n := nHits + nPicks
-	if nHits > 0 {
-		n++ // "Recently listened" header
-	}
-	if nPicks > 0 {
-		n++ // "Next from those" header
-	}
-	return n
+// homeTileW is the cover-tile width in dp; the grid derives its column
+// count from it.
+const homeTileW = 150
+
+// homeMarq holds the marquee scroll states of one tile's two labels.
+type homeMarq struct {
+	title, artist marquee
 }
 
-// homeRowAt maps a flat list row to what it shows: a header string
-// (non-empty means the row is a header) or a track index into
-// hits/picks. idx < 0 with an empty header marks out of range.
-func homeRowAt(nHits, nPicks, row int) (isPick bool, idx int, header string) {
-	if nHits > 0 {
-		if row == 0 {
-			return false, -1, "Recently listened"
-		}
-		row--
-		if row < nHits {
-			return false, row, ""
-		}
-		row -= nHits
+// homeTile renders one cover tile: square art with a hover-only + button
+// (queue without interrupting), then single-line title and artist.
+func (ui *appUI) homeTile(gtx layout.Context, t ytm.Track, i int) layout.Dimensions {
+	now := gtx.Now
+	if now.IsZero() {
+		now = time.Now()
 	}
-	if nPicks > 0 {
-		if row == 0 {
-			return false, -1, "Next from those"
-		}
-		row--
-		if row < nPicks {
-			return true, row, ""
-		}
+	st := ui.interState(&ui.homeRows[i], now)
+	hv := float32(st.hover.val(now))
+	pw := float32(st.press.val(now))
+
+	ui.mu.Lock()
+	playing := ui.nowTrack.VideoID == t.VideoID && t.VideoID != ""
+	ui.mu.Unlock()
+
+	macro := op.Record(gtx.Ops)
+	dims := ui.homeRows[i].Layout(gtx, func(gtx layout.Context) layout.Dimensions {
+		return layout.UniformInset(unit.Dp(8)).Layout(gtx, func(gtx layout.Context) layout.Dimensions {
+			return layout.Flex{Axis: layout.Vertical}.Layout(gtx,
+				layout.Rigid(func(gtx layout.Context) layout.Dimensions {
+					return layout.Stack{Alignment: layout.SE}.Layout(gtx,
+						layout.Expanded(func(gtx layout.Context) layout.Dimensions {
+							return ui.coverArea(gtx, t, homeTileW-16)
+						}),
+						layout.Stacked(func(gtx layout.Context) layout.Dimensions {
+							if hv < 0.5 {
+								return layout.Dimensions{}
+							}
+							return ui.iconBtn(gtx, &ui.homePlus[i], 28, iconPlus, false)
+						}),
+					)
+				}),
+				layout.Rigid(layout.Spacer{Height: unit.Dp(6)}.Layout),
+				layout.Rigid(func(gtx layout.Context) layout.Dimensions {
+					title := material.Body1(ui.th, t.Title)
+					title.TextSize = unit.Sp(13)
+					title.MaxLines = 1
+					if playing {
+						title.Color = colAmber
+					}
+					return ui.marqueeLabel(gtx, title, &ui.homeMarq[i].title, gtx.Dp(unit.Dp(homeTileW-16)), hv >= 0.5)
+				}),
+				layout.Rigid(func(gtx layout.Context) layout.Dimensions {
+					meta := material.Body2(ui.th, t.Artist)
+					meta.TextSize = unit.Sp(12)
+					meta.MaxLines = 1
+					meta.Color = colSub
+					return ui.marqueeLabel(gtx, meta, &ui.homeMarq[i].artist, gtx.Dp(unit.Dp(homeTileW-16)), hv >= 0.5)
+				}),
+			)
+		})
+	})
+	call := macro.Stop()
+	r := image.Rectangle{Max: dims.Size}
+	if playing {
+		fillRect(gtx, r, 10, colPanel)
+		fillRect(gtx, image.Rect(0, 2, 3, dims.Size.Y-2), 1, colAmber)
 	}
-	return false, -1, ""
+	if a := hv*(1-pw) + pw*0.6; a > 0.01 {
+		hbg := colHover
+		if pw > 0.01 {
+			hbg = colPress
+		}
+		hbg.A = uint8(float32(colHover.A) * a)
+		fillRect(gtx, r, 10, hbg)
+	}
+	call.Add(gtx.Ops)
+	return dims
 }
 
-// handleHomeClicks wires the Home tab: a row click plays the track now
+// homeTileTrack returns the track shown by flat tile index i (hits first,
+// then picks).
+func (ui *appUI) homeTileTrack(i int) ytm.Track {
+	ui.mu.Lock()
+	defer ui.mu.Unlock()
+	if i < len(ui.hits) {
+		return ui.hits[i]
+	}
+	if i-len(ui.hits) < len(ui.picks) {
+		return ui.picks[i-len(ui.hits)]
+	}
+	return ytm.Track{}
+}
+
+// handleHomeClicks wires the Home tiles: a tile click plays the track now
 // (which naturally re-seeds the radio and the recommendations), the +
-// button appends to the queue without interrupting playback.
+// overlay appends to the queue without interrupting playback. The + is
+// checked first so a click on it never also starts playback.
 func (ui *appUI) handleHomeClicks(gtx layout.Context) {
 	ui.mu.Lock()
-	nHits, nPicks := len(ui.hits), len(ui.picks)
+	nTiles := len(ui.hits) + len(ui.picks)
 	ui.mu.Unlock()
-	rows := homeRowCount(nHits, nPicks)
-	if rows == 0 {
-		return
-	}
-
-	for i := 0; i < rows; i++ {
-		isPick, idx, header := homeRowAt(nHits, nPicks, i)
-		if header != "" || idx < 0 {
-			continue
-		}
-		var play bool
-		if i < len(ui.homeRows) && ui.homeRows[i].Clicked(gtx) {
-			play = true
+	for i := 0; i < nTiles; i++ {
+		if i >= len(ui.homeRows) {
+			break
 		}
 		plus := i < len(ui.homePlus) && ui.homePlus[i].Clicked(gtx)
-		if !play && !plus {
+		play := !plus && ui.homeRows[i].Clicked(gtx)
+		if !plus && !play {
 			continue
 		}
-		var t ytm.Track
-		ui.mu.Lock()
-		if isPick && idx < len(ui.picks) {
-			t = ui.picks[idx]
-		} else if !isPick && idx < len(ui.hits) {
-			t = ui.hits[idx]
-		}
-		ui.mu.Unlock()
+		t := ui.homeTileTrack(i)
 		if t.VideoID == "" {
 			continue
 		}
-		if plus && !play {
+		if plus {
 			ui.mu.Lock()
 			ui.queue = append(ui.queue, t)
 			n := len(ui.queue)
@@ -739,8 +760,9 @@ func (ui *appUI) handleHomeClicks(gtx layout.Context) {
 	}
 }
 
-// homeView renders the Home tab: recently listened tracks, then the
-// "next from those" mix. Rows behave like search results.
+// homeView renders the Home tab as a tiled grid: "Jump back in" tiles from
+// the listening history, then "For you" tiles from the recommendation
+// engine. Tiles behave like search rows: click plays, + queues.
 func (ui *appUI) homeView(gtx layout.Context) layout.Dimensions {
 	ui.mu.Lock()
 	nHits, nPicks := len(ui.hits), len(ui.picks)
@@ -757,46 +779,72 @@ func (ui *appUI) homeView(gtx layout.Context) layout.Dimensions {
 		return layout.Center.Layout(gtx, tip.Layout)
 	}
 
-	rows := homeRowCount(nHits, nPicks)
-	if len(ui.homeRows) != rows {
-		ui.homeRows = make([]widget.Clickable, rows)
-		ui.homePlus = make([]widget.Clickable, rows)
+	tiles := nHits + nPicks
+	if len(ui.homeRows) != tiles {
+		ui.homeRows = make([]widget.Clickable, tiles)
+		ui.homePlus = make([]widget.Clickable, tiles)
+		ui.homeMarq = make([]homeMarq, tiles)
 	}
-	return material.List(ui.th, &ui.hlist).Layout(gtx, rows, func(gtx layout.Context, i int) layout.Dimensions {
-		isPick, idx, header := homeRowAt(nHits, nPicks, i)
-		if header != "" {
-			h := material.Body2(ui.th, header)
+	// marquee activity is re-detected every frame; the refresh loop keeps
+	// frames flowing while any tile scrolls
+	ui.homeMarqActive.Store(false)
+
+	// grid geometry: as many columns as fit the available width
+	tilePx := gtx.Dp(unit.Dp(homeTileW))
+	gapPx := gtx.Dp(unit.Dp(14))
+	cols := 1
+	if tilePx+gapPx > 0 {
+		cols = (gtx.Constraints.Max.X + gapPx) / (tilePx + gapPx)
+		if cols < 1 {
+			cols = 1
+		}
+	}
+
+	// flat row list: section headers interleaved with grid rows
+	type gridRow struct {
+		header string
+		from   int // tile index range [from, to)
+		to     int
+	}
+	var rows []gridRow
+	if nHits > 0 {
+		rows = append(rows, gridRow{header: "Jump back in"})
+		for i := 0; i < nHits; i += cols {
+			rows = append(rows, gridRow{from: i, to: min(i+cols, nHits)})
+		}
+	}
+	if nPicks > 0 {
+		rows = append(rows, gridRow{header: "For you"})
+		for i := 0; i < nPicks; i += cols {
+			rows = append(rows, gridRow{from: nHits + i, to: nHits + min(i+cols, nPicks)})
+		}
+	}
+
+	return material.List(ui.th, &ui.hlist).Layout(gtx, len(rows), func(gtx layout.Context, i int) layout.Dimensions {
+		row := rows[i]
+		if row.header != "" {
+			h := material.Body1(ui.th, row.header)
 			h.Color = colSub
-			h.TextSize = unit.Sp(13)
-			return layout.Inset{Left: unit.Dp(12), Top: unit.Dp(14), Bottom: unit.Dp(4)}.Layout(gtx, h.Layout)
+			h.TextSize = unit.Sp(14)
+			return layout.Inset{Left: unit.Dp(12), Top: unit.Dp(14), Bottom: unit.Dp(6)}.Layout(gtx, h.Layout)
 		}
-		ui.mu.Lock()
-		var t ytm.Track
-		if isPick && idx < len(ui.picks) {
-			t = ui.picks[idx]
-		} else if !isPick && idx < len(ui.hits) {
-			t = ui.hits[idx]
+		var children []layout.FlexChild
+		for ti := row.from; ti < row.to; ti++ {
+			t := ui.homeTileTrack(ti)
+			if t.VideoID == "" {
+				continue
+			}
+			idx := ti
+			children = append(children, layout.Rigid(func(gtx layout.Context) layout.Dimensions {
+				return ui.homeTile(gtx, t, idx)
+			}))
+			if ti < row.to-1 {
+				children = append(children, layout.Rigid(layout.Spacer{Width: unit.Dp(14)}.Layout))
+			}
 		}
-		ui.mu.Unlock()
-		if t.VideoID == "" {
-			return layout.Dimensions{Size: gtx.Constraints.Min}
-		}
-		return layout.Inset{Right: unit.Dp(8)}.Layout(gtx, func(gtx layout.Context) layout.Dimensions {
-			return layout.Flex{Axis: layout.Horizontal, Alignment: layout.Middle}.Layout(gtx,
-				layout.Flexed(1, func(gtx layout.Context) layout.Dimensions {
-					return ui.trackRow(gtx, t, &ui.homeRows[i], false)
-				}),
-				layout.Rigid(func(gtx layout.Context) layout.Dimensions {
-					return ui.iconBtn(gtx, &ui.homePlus[i], 30, iconPlus, false)
-				}),
-				layout.Rigid(layout.Spacer{Width: unit.Dp(2)}.Layout),
-			)
-		})
+		return layout.Flex{Axis: layout.Horizontal}.Layout(gtx, children...)
 	})
 }
-
-// newLoadCtx cancels any in-flight stream resolution and returns a fresh
-// context for the one about to start.
 func (ui *appUI) newLoadCtx() context.Context {
 	ui.mu.Lock()
 	defer ui.mu.Unlock()

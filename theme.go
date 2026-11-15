@@ -17,6 +17,7 @@ import (
 	"gioui.org/op/paint"
 	"gioui.org/unit"
 	"gioui.org/widget"
+	"gioui.org/widget/material"
 )
 
 // ---- palette: near-monochrome dark, one warm accent ----
@@ -126,6 +127,9 @@ func (ui *appUI) interState(c *widget.Clickable, now time.Time) *inter {
 // uiMicroAnimating reports whether any hover/press fade or the rail
 // indicator is still settling; refreshLoop uses it to keep frames coming.
 func (ui *appUI) uiMicroAnimating() bool {
+	if ui.homeMarqActive.Load() {
+		return true
+	}
 	ui.mu.Lock()
 	defer ui.mu.Unlock()
 	if !ui.railY.settled() {
@@ -347,4 +351,91 @@ func (ui *appUI) navRail(gtx layout.Context) layout.Dimensions {
 	gr.Pop()
 
 	return layout.Dimensions{Size: image.Pt(w, railH)}
+}
+
+// ---- marquee: horizontally scrolling label for text that overflows ----
+
+const (
+	marqueeSpeedPx = 42 // px/s while scrolling
+	marqueePause   = 900 * time.Millisecond
+)
+
+// marquee is the scroll state of one overflowing label. Touched only from
+// the UI goroutine; the refresh loop learns about activity via the
+// homeMarqActive atomic instead of reading these fields.
+type marquee struct {
+	offset  float64
+	last    time.Time
+	phase   int // 0 = start pause, 1 = scrolling, 2 = end pause
+	phaseAt time.Time
+}
+
+// advance steps the pause-scroll-pause-reset cycle and returns the current
+// pixel offset. textW is the full text width, viewW the visible window.
+func (m *marquee) advance(now time.Time, textW, viewW int) float64 {
+	if m.last.IsZero() {
+		m.last, m.phaseAt = now, now
+	}
+	dt := now.Sub(m.last).Seconds()
+	m.last = now
+	max := float64(textW - viewW)
+	if max < 0 {
+		max = 0
+	}
+	switch m.phase {
+	case 0: // hold at the start so the beginning is readable
+		if now.Sub(m.phaseAt) >= marqueePause {
+			m.phase, m.phaseAt = 1, now
+		}
+	case 1:
+		m.offset += marqueeSpeedPx * dt
+		if m.offset >= max {
+			m.offset = max
+			m.phase, m.phaseAt = 2, now
+		}
+	case 2: // hold at the end so the ending is readable
+		if now.Sub(m.phaseAt) >= marqueePause {
+			m.offset = 0
+			m.phase, m.phaseAt = 0, now
+		}
+	}
+	return m.offset
+}
+
+// reset parks the marquee back at its start (used when hover ends).
+func (m *marquee) reset() {
+	m.offset = 0
+	m.phase = 0
+	m.last = time.Time{}
+}
+
+// marqueeLabel renders lbl inside viewW. Text that fits renders
+// statically; overflowing text renders ellipsized until animate is true,
+// then it scrolls through the full text. Returns the label dimensions.
+func (ui *appUI) marqueeLabel(gtx layout.Context, lbl material.LabelStyle, mq *marquee, viewW int, animate bool) layout.Dimensions {
+	// natural single-line size, unconstrained width
+	mgtx := gtx
+	mgtx.Constraints = layout.Constraints{Max: image.Pt(1<<26, gtx.Constraints.Max.Y)}
+	macro := op.Record(gtx.Ops)
+	dims := lbl.Layout(mgtx)
+	call := macro.Stop()
+	if dims.Size.X <= viewW {
+		call.Add(gtx.Ops)
+		return dims
+	}
+	if !animate {
+		mq.reset()
+		cgtx := gtx
+		cgtx.Constraints.Max.X = viewW
+		return lbl.Layout(cgtx) // MaxLines=1 -> ellipsized
+	}
+	ui.homeMarqActive.Store(true)
+	off := mq.advance(gtx.Now, dims.Size.X, viewW)
+	h := dims.Size.Y
+	cl := clip.Rect{Max: image.Pt(viewW, h)}.Push(gtx.Ops)
+	tr := op.Offset(image.Pt(-int(off), 0)).Push(gtx.Ops)
+	call.Add(gtx.Ops)
+	tr.Pop()
+	cl.Pop()
+	return layout.Dimensions{Size: image.Pt(viewW, h)}
 }
