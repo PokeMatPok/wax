@@ -5,6 +5,8 @@ kept compiling), written in Go with the Gio GUI toolkit — no cgo, no
 Chromium, no Electron. The name refers to vinyl: the signature UI element is
 a screen-corner record that spins while music plays.
 
+Licensed under the [MIT license](LICENSE).
+
 ## Current state
 
 - Search (YouTube Music InnerTube, client `WEB_REMIX`, no API key)
