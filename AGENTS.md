@@ -16,10 +16,19 @@ twins for every `*_windows.go` file).
 - Tests: `go test ./...` — `internal/ytm`, `internal/extract`,
   `internal/player` and root e2e tests are LIVE (network, bin/mpv needed);
   they skip when dependencies are missing. Allow ~2.5 s for player tests.
-- Deploy while the app runs (user launches it via shortcuts):
-  `taskkill //IM Wax.exe //F` then copy BOTH `ytm-client.exe` and
+- Deploy while the app runs (user launches it via shortcuts): run
+  `build.cmd` FIRST (repo-root binaries go stale — a stale-helper deploy
+  once shipped a known-broken SMTC build), then
+  `taskkill //IM Wax.exe //F`, copy BOTH `ytm-client.exe` and
   `wax-smtc.exe` into `$LOCALAPPDATA/Programs/Wax/`
   then `cd "$LOCALAPPDATA/Programs/Wax" && cmd //c "start Wax.exe"`.
+- Install/repair step: the media flyout resolves the app name/icon via the
+  Start Menu app list, so the shortcuts must carry
+  `System.AppUserModel.ID = "Wax"` (matching the helper's claimed AUMID).
+  Stamp with `go run ./cmd/aumid-stamp <path-to-lnk> Wax` for the Start
+  Menu and Desktop shortcuts. The registry key
+  `HKCU\Software\Classes\AppUserModelId\Wax` (DisplayName + IconUri) is
+  also set during install.
 - Child processes (yt-dlp, mpv, taskkill, tray) must never flash a console:
   every `exec.Command` needs `hideChildConsole(cmd)` (SysProcAttr HideWindow
   + CREATE_NO_WINDOW). Twins: `hidewin_windows.go` / `hidewin_other.go`.
