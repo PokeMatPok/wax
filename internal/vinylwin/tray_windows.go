@@ -25,6 +25,10 @@ var (
 	procTrackPop  = user32.NewProc("TrackPopupMenu")
 	procDestroyM  = user32.NewProc("DestroyMenu")
 	procFindWin   = user32.NewProc("FindWindowW")
+	procLoadImg   = user32.NewProc("LoadImageW")
+	procGetSysMet = user32.NewProc("GetSystemMetrics")
+	procSendMsg   = user32.NewProc("SendMessageW")
+	procGetMod    = kernel32.NewProc("GetModuleHandleW")
 	procDPIAware  = user32.NewProc("SetProcessDpiAwarenessContext")
 	procOldAPI    = user32.NewProc("SetProcessDPIAware")
 	procGetLongX  = user32.NewProc("GetWindowLongPtrW")
@@ -40,12 +44,22 @@ const (
 	nifTip    = 0x00000004
 	idcApp    = 32512
 	wmClose   = 0x0010
+	wmSetIcon = 0x0080
 	wmApp     = 0x8000
 	swHide    = 0
 	swShow    = 5
 	swRestore = 9
 	tpmRetCmd = 0x0100
 	tpmNoNot  = 0x0080
+
+	iconSmall  = 0 // WM_SETICON wParam
+	iconBig    = 1
+	imageIcon  = 1 // LoadImage type
+	lrShared   = 0x8000
+	smCxIcon   = 11
+	smCyIcon   = 12
+	smCxSmIcon = 49
+	smCySmIcon = 50
 
 	gwlpWndProc = -4
 )
@@ -105,7 +119,10 @@ func utf16Arg(s string) uintptr {
 
 // addTrayIcon puts the tray icon on o.win's message flow.
 func (o *overlay) addTrayIcon(tip string) bool {
-	icon, _, _ := procLoadIcon.Call(0, idcApp)
+	icon := appIcon(sysMetric(smCxSmIcon), sysMetric(smCySmIcon))
+	if icon == 0 {
+		icon, _, _ = procLoadIcon.Call(0, idcApp) // fallback: generic app icon
+	}
 	nid := notifyIconDataW{
 		CbSize:           uint32(unsafe.Sizeof(notifyIconDataW{})),
 		HWnd:             o.win,
@@ -135,6 +152,31 @@ func copyUtf16(dst []uint16, s string) {
 	}
 }
 
+// appIcon loads the embedded application icon (resource ID 1, put there by
+// rsrc_windows_amd64.syso) at the given system metric size. Returns 0 when
+// the resource is missing.
+func appIcon(cx, cy uintptr) uintptr {
+	inst, _, _ := procGetMod.Call(0)
+	h, _, _ := procLoadImg.Call(inst, 1, imageIcon, cx, cy, lrShared)
+	return h
+}
+
+func sysMetric(n uintptr) uintptr {
+	v, _, _ := procGetSysMet.Call(n)
+	return v
+}
+
+// setMainWindowIcon gives the gio window the app icon for its title bar and
+// taskbar entry (gio registers its window class with a generic icon).
+func setMainWindowIcon(h uintptr) {
+	if big := appIcon(sysMetric(smCxIcon), sysMetric(smCyIcon)); big != 0 {
+		procSendMsg.Call(h, wmSetIcon, iconBig, big)
+	}
+	if small := appIcon(sysMetric(smCxSmIcon), sysMetric(smCySmIcon)); small != 0 {
+		procSendMsg.Call(h, wmSetIcon, iconSmall, small)
+	}
+}
+
 // subclassMain installs a wndproc on the main window that hides it on
 // WM_CLOSE (process keeps running, playback continues).
 func subclassMain(title string) {
@@ -148,6 +190,7 @@ func subclassMain(title string) {
 		return
 	}
 	mainWin = h
+	setMainWindowIcon(h)
 	oldTrayProc, _, _ = procGetLongX.Call(h, uintptr(frameIDX))
 	newProc := syscall.NewCallback(hideOnCloseProc)
 	procSetLongX.Call(h, uintptr(frameIDX), newProc)
