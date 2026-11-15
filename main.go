@@ -954,6 +954,7 @@ func (ui *appUI) playTrack(ctx context.Context, t ytm.Track, idx int) {
 	// (fresh stream URL each attempt), bail out on context cancel
 	var s *extract.Stream
 	var lastErr error
+	var lastErrFromResolve bool
 	backoffs := []time.Duration{0, 900 * time.Millisecond, 2500 * time.Millisecond}
 	for attempt := 0; attempt < len(backoffs); attempt++ {
 		if backoffs[attempt] > 0 {
@@ -965,6 +966,7 @@ func (ui *appUI) playTrack(ctx context.Context, t ytm.Track, idx int) {
 		stream, err := ui.extractor.Resolve(ctx, t.VideoID)
 		if err != nil {
 			lastErr = err
+			lastErrFromResolve = true
 			if ctx.Err() != nil {
 				break
 			}
@@ -972,6 +974,7 @@ func (ui *appUI) playTrack(ctx context.Context, t ytm.Track, idx int) {
 		}
 		if err := ui.engine.Play(stream.URL); err != nil {
 			lastErr = err
+			lastErrFromResolve = false
 			if ctx.Err() != nil {
 				break
 			}
@@ -981,7 +984,7 @@ func (ui *appUI) playTrack(ctx context.Context, t ytm.Track, idx int) {
 		break
 	}
 	if lastErr != nil {
-		ui.finishLoad(lastErr, idx)
+		ui.finishLoad(lastErr, idx, lastErrFromResolve)
 		return
 	}
 	title := dispTitle(t)
@@ -1022,9 +1025,14 @@ func (ui *appUI) playTrack(ctx context.Context, t ytm.Track, idx int) {
 	}
 }
 
-func (ui *appUI) finishLoad(err error, idx int) {
+func (ui *appUI) finishLoad(err error, idx int, fromResolve bool) {
 	ui.mu.Lock()
 	ui.status = "Load failed: " + err.Error()
+	if fromResolve {
+		// extraction failures are almost always a stale yt-dlp; the
+		// bundled binary in bin/ just needs replacing
+		ui.status += " (stream extraction failed — yt-dlp may need an update)"
+	}
 	if ui.loadingIdx == idx {
 		ui.loadingIdx = -1
 	}

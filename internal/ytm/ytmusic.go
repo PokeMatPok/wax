@@ -28,6 +28,19 @@ var ytClient = &http.Client{Timeout: 20 * time.Second}
 
 // SearchYTMusic runs a YouTube Music search and returns the track results.
 func SearchYTMusic(query string) ([]Track, error) {
+	root, err := searchRaw(query)
+	if err != nil {
+		return nil, err
+	}
+	tracks, err := tracksFromResponse(root, query)
+	if err != nil {
+		return nil, err
+	}
+	return tracks, nil
+}
+
+// searchRaw performs the InnerTube search request and decodes the response.
+func searchRaw(query string) (any, error) {
 	payload := map[string]any{
 		"context": map[string]any{
 			"client": map[string]any{
@@ -64,7 +77,12 @@ func SearchYTMusic(query string) ([]Track, error) {
 	if err := json.NewDecoder(resp.Body).Decode(&root); err != nil {
 		return nil, fmt.Errorf("decoding youtube response: %w", err)
 	}
+	return root, nil
+}
 
+// tracksFromResponse collects playable track results from a decoded search
+// response.
+func tracksFromResponse(root any, query string) ([]Track, error) {
 	items := findObjects(root, "musicResponsiveListItemRenderer")
 	var tracks []Track
 	for _, node := range items {
@@ -152,6 +170,11 @@ func parseTrack(item map[string]any) Track {
 			t.Duration = p
 			break
 		}
+		if isLiveLabel(p) {
+			// live streams show a badge where songs show a duration
+			t.Duration = strings.ToUpper(p)
+			break
+		}
 	}
 	for _, p := range rest {
 		if _, ok := nonMetadata(p); !ok {
@@ -165,7 +188,7 @@ func parseTrack(item map[string]any) Track {
 	}
 	t.Title = title
 	if t.Artist == "" {
-		t.Artist = artistFromAccessibility(item)
+		t.Artist = artistFromAccessibility(item, title)
 	}
 	if th, ok := item["thumbnail"].(map[string]any); ok {
 		t.Thumbnail = largestThumbnail(th)
@@ -208,8 +231,10 @@ func largestThumbnail(wrapper map[string]any) string {
 }
 
 // artistFromAccessibility extracts the fallback artist from the play button's
-// accessibility label, which looks like "Play <title> - <artist>".
-func artistFromAccessibility(item map[string]any) string {
+// accessibility label, which looks like "Play <title> - <artist>". The title
+// is known, so split on it first; a bare LastIndex(" - ") would truncate
+// artists that themselves contain " - ".
+func artistFromAccessibility(item map[string]any, title string) string {
 	overlay, ok := item["overlay"].(map[string]any)
 	if !ok {
 		return ""
@@ -236,6 +261,11 @@ func artistFromAccessibility(item map[string]any) string {
 	}
 	label, _ := ad["label"].(string)
 	label = strings.TrimSpace(strings.TrimPrefix(label, "Play "))
+	if title != "" {
+		if after, ok := strings.CutPrefix(label, title+" - "); ok {
+			return strings.TrimSpace(after)
+		}
+	}
 	if i := strings.LastIndex(label, " - "); i >= 0 {
 		return strings.TrimSpace(label[i+3:])
 	}
@@ -243,13 +273,17 @@ func artistFromAccessibility(item map[string]any) string {
 }
 
 // nonMetadata returns the part unchanged if it is real metadata (artist,
-// album, ...), and the empty string if it is duration, a type label, or
-// view/play counts.
+// album, ...), and the empty string if it is duration, a type label, a
+// view/play count, or a freshness stamp ("10 years ago", "Streamed 3 years
+// ago"). Anything else used to leak into the Album field positionally.
 func nonMetadata(p string) (string, bool) {
-	if isDuration(p) || isTypeLabel(p) {
+	if isDuration(p) || isTypeLabel(p) || isLiveLabel(p) {
 		return "", false
 	}
 	if strings.HasSuffix(p, " plays") || strings.HasSuffix(p, " views") {
+		return "", false
+	}
+	if strings.HasSuffix(p, " ago") {
 		return "", false
 	}
 	return p, true
@@ -281,8 +315,18 @@ func isDuration(s string) bool {
 }
 
 func isTypeLabel(s string) bool {
-	switch s {
-	case "Song", "Video", "Single", "EP", "Album", "Playlist", "Artist", "Live", "Radio", "Top result", "Top Result":
+	switch strings.ToLower(s) {
+	case "song", "video", "single", "ep", "album", "playlist", "artist", "live", "radio", "top result":
+		return true
+	}
+	return false
+}
+
+// isLiveLabel matches the fixed-column badges live streams and premieres
+// show instead of a duration ("LIVE", "PREMIERE" — casing varies).
+func isLiveLabel(s string) bool {
+	switch strings.ToLower(s) {
+	case "live", "premiere":
 		return true
 	}
 	return false
