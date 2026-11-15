@@ -92,7 +92,8 @@ func (m *Mpv) Start() error {
 		"--idle=yes",         // stay alive between tracks
 		"--audio-display=no", // don't pop a window for audio metadata
 		"--force-window=no",
-		"--keep-open=no", // on end-of-track go back to idle
+		"--keep-open=no",      // on end-of-track go back to idle
+		"--media-controls=no", // Wax itself owns the SMTC session (internal/smtc)
 		fmt.Sprintf("--input-ipc-server=%s", m.pipeName),
 		fmt.Sprintf("--volume=%d", vol),
 	}

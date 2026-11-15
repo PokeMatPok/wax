@@ -31,6 +31,7 @@ import (
 	"ytm-client/internal/lyricswin"
 	"ytm-client/internal/player"
 	"ytm-client/internal/prefs"
+	"ytm-client/internal/smtc"
 	"ytm-client/internal/vinylwin"
 	"ytm-client/internal/ytm"
 )
@@ -142,6 +143,15 @@ type appUI struct {
 	prefs        *prefs.Store
 	recData      bool // mirrored under mu; read by playTrack
 	bubShow      bool // mirrored under mu; polled by the lyrics overlay
+
+	// SMTC (Windows media overlay): commands flow in from media keys via
+	// smtcCmds; publisher state is touched only by the refresh loop.
+	smtcCmds  chan smtc.Button
+	smtcTrack ytm.Track    // last track published to SMTC
+	smtcCover string       // last cover path published to SMTC
+	smtcState player.State // last playback state published to SMTC
+	smtcTlAt  time.Time    // last timeline publish (1 Hz throttle)
+	smtcTlPos time.Duration
 }
 
 func newAppUI() *appUI {
@@ -163,6 +173,7 @@ func newAppUI() *appUI {
 		interMap:   map[*widget.Clickable]*inter{},
 		covers:     cover.New(),
 		lyrClient:  lyrics.NewClient(),
+		smtcCmds:   make(chan smtc.Button, 8),
 	}
 	ui.hstore = history.Load()
 	ui.hlist = widget.List{List: layout.List{Axis: layout.Vertical}}
@@ -235,6 +246,20 @@ func (ui *appUI) run(w *app.Window) error {
 	} else {
 		ui.status = err.Error()
 	}
+	// Windows media overlay: register as the SMTC source so the flyout
+	// shows track info + art and media keys drive the same control path
+	// as the in-app buttons and shortcuts. Buttons are funneled through
+	// a channel and dispatched on the refresh loop (never blocks the
+	// WinRT callback thread).
+	go func() {
+		smtc.Start(func(b smtc.Button) {
+			select {
+			case ui.smtcCmds <- b:
+			default:
+			}
+		})
+	}()
+
 	defer func() {
 		// graceful exit: persist the queue one last time
 		ui.mu.Lock()
@@ -288,6 +313,9 @@ func (ui *appUI) refreshLoop(ctx context.Context, w *app.Window) {
 		select {
 		case <-ctx.Done():
 			return
+		case b := <-ui.smtcCmds:
+			ui.dispatchSMTCButton(b)
+			continue
 		case now := <-ticker.C:
 			dt = now.Sub(prevTick).Seconds()
 			prevTick = now
@@ -329,6 +357,80 @@ func (ui *appUI) refreshLoop(ctx context.Context, w *app.Window) {
 		if changed == false && ui.uiMicroAnimating() {
 			w.Invalidate()
 		}
+
+		ui.syncSMTC(st)
+	}
+}
+
+// engineStatus reads the engine status (zero status when no engine).
+func (ui *appUI) engineStatus() player.Status {
+	if ui.engine == nil {
+		return player.Status{}
+	}
+	return ui.engine.Status()
+}
+
+// dispatchSMTCButton maps a flyout/media-key button onto the same control
+// path as the keyboard shortcuts. Runs on the refresh loop goroutine; the
+// toggles and queue ops involved are safe off the UI thread.
+func (ui *appUI) dispatchSMTCButton(b smtc.Button) {
+	switch b {
+	case smtc.BtnPlay, smtc.BtnPause:
+		ui.togglePlay()
+	case smtc.BtnStop:
+		ui.mu.Lock()
+		ui.stoppedManually = true
+		ui.mu.Unlock()
+		if ui.engine != nil {
+			ui.engine.Stop()
+		}
+	case smtc.BtnNext:
+		ui.playNext()
+	case smtc.BtnPrevious:
+		ui.playPrev(ui.engineStatus())
+	}
+}
+
+// syncSMTC mirrors the optimistic now-track, playback state and timeline
+// (1 Hz) into the system media overlay. Runs on the refresh loop only.
+func (ui *appUI) syncSMTC(st player.Status) {
+	ui.mu.Lock()
+	t := ui.nowTrack
+	ui.mu.Unlock()
+
+	if t.VideoID == "" {
+		if ui.smtcTrack.VideoID != "" {
+			ui.smtcTrack = ytm.Track{}
+			smtc.SetStopped()
+		}
+		return
+	}
+	if t.VideoID != ui.smtcTrack.VideoID || t.Title != ui.smtcTrack.Title || t.Artist != ui.smtcTrack.Artist {
+		ui.smtcTrack = t
+		ui.smtcCover = "" // art may not be on disk yet; SetCover fills it
+		smtc.SetTrack(t.Title, t.Artist, t.Album, "")
+	}
+	if p := ui.covers.Path(t.VideoID); p != "" && p != ui.smtcCover {
+		ui.smtcCover = p
+		smtc.SetCover(p)
+	}
+	if st.State != ui.smtcState {
+		ui.smtcState = st.State
+		switch st.State {
+		case player.StatePlaying:
+			smtc.SetPlayback(true)
+		case player.StatePaused:
+			smtc.SetPlayback(false)
+		default:
+			smtc.SetStopped()
+		}
+	}
+	// timeline at most once a second, or instantly after a seek jump
+	if st.Duration > 0 &&
+		(time.Since(ui.smtcTlAt) >= time.Second || st.Position != ui.smtcTlPos) {
+		ui.smtcTlAt = time.Now()
+		ui.smtcTlPos = st.Position
+		smtc.SetTimeline(st.Position, st.Duration)
 	}
 }
 
