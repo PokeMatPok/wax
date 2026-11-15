@@ -1,4 +1,6 @@
-# Wax
+<p align="center">
+  <img src="assets/readme/logo.gif" alt="Wax — your music, spinning on the desktop" width="720"/>
+</p>
 
 Custom YouTube Music client for desktop (Windows first, macOS/Linux targets
 kept compiling), written in Go with the Gio GUI toolkit — no cgo, no
@@ -6,6 +8,15 @@ Chromium, no Electron. The name refers to vinyl: the signature UI element is
 a screen-corner record that spins while music plays.
 
 Licensed under the [MIT license](LICENSE).
+
+## The look
+
+Stylized concept of the UI — search, queue, synced lyrics and the
+screen-corner vinyl (animated SVG, no footage of real covers):
+
+<p align="center">
+  <img src="assets/readme/demo.svg" alt="Wax concept — player, queue, lyrics and the corner vinyl" width="720"/>
+</p>
 
 ## Current state
 

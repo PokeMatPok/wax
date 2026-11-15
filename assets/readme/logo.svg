@@ -1,0 +1,106 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="800" height="360" viewBox="0 0 800 360" role="img" aria-label="Wax - vinyl-style YouTube Music desktop client">
+  <style>
+    .fadeAll  { animation: fadeAll 5.2s ease-in-out infinite; }
+    .enter    { animation: enter 5.2s cubic-bezier(.34,1.45,.4,1) infinite; }
+    .spin     { animation: spin 9s linear infinite; transform-origin: 280px 180px; }
+    .shine    { animation: shine 5.2s ease-in-out infinite; }
+    .word     { animation: rise 5.2s cubic-bezier(.22,1,.36,1) infinite; }
+    .sweep    { animation: sweep 5.2s cubic-bezier(.22,1,.36,1) infinite; transform-origin: 430px 244px; }
+    .t1 { animation-delay:  0s; }
+    .t2 { animation-delay:.04s; }
+    .t3 { animation-delay:.08s; }
+    @keyframes fadeAll { 0%{opacity:0} 4%{opacity:1} 88%{opacity:1} 97%{opacity:0} 100%{opacity:0} }
+    @keyframes enter {
+      0%   { transform: translate(250px,150px) scale(.45) rotate(230deg); opacity:0 }
+      6%   { opacity:1 }
+      24%  { transform: translate(0,0) scale(1) rotate(0deg); opacity:1 }
+      100% { transform: translate(0,0) scale(1) rotate(0deg); opacity:1 }
+    }
+    @keyframes spin { to { transform: rotate(360deg) } }
+    @keyframes shine {
+      0%,26% { transform: translateX(-170px) }
+      40%    { transform: translateX(180px) }
+      100%   { transform: translateX(180px) }
+    }
+    @keyframes rise {
+      0%,20%   { opacity:0; transform: translateY(16px); letter-spacing:.34em }
+      34%      { opacity:1; transform: translateY(0); }
+      38%      { letter-spacing:.12em }
+      100%     { opacity:1; transform: translateY(0); letter-spacing:.12em }
+    }
+    @keyframes sweep {
+      0%,38%  { transform: scaleX(0) }
+      52%     { transform: scaleX(1) }
+      100%    { transform: scaleX(1) }
+    }
+  </style>
+
+  <defs>
+    <radialGradient id="disc" cx="38%" cy="34%" r="75%">
+      <stop offset="0%"  stop-color="#26262c"/>
+      <stop offset="55%" stop-color="#141418"/>
+      <stop offset="100%" stop-color="#09090b"/>
+    </radialGradient>
+    <linearGradient id="band" x1="0" y1="0" x2="1" y2="0">
+      <stop offset="0"   stop-color="#ffffff" stop-opacity="0"/>
+      <stop offset=".5"  stop-color="#ffffff" stop-opacity=".28"/>
+      <stop offset="1"   stop-color="#ffffff" stop-opacity="0"/>
+    </linearGradient>
+    <clipPath id="discClip"><circle cx="280" cy="180" r="117"/></clipPath>
+  </defs>
+
+  <rect width="800" height="360" fill="#141418"/>
+
+  <g class="fadeAll">
+    <!-- whoosh trail -->
+    <g stroke="#d9a441" stroke-width="3" stroke-linecap="round" opacity=".5">
+      <line x1="96" y1="300" x2="150" y2="266">
+        <animate attributeName="opacity" values="0;.55;0" keyTimes="0;.10;.22" dur="5.2s" repeatCount="indefinite"/>
+      </line>
+      <line x1="66" y1="322" x2="132" y2="280">
+        <animate attributeName="opacity" values="0;.4;0" keyTimes="0;.13;.26" dur="5.2s" repeatCount="indefinite"/>
+      </line>
+      <line x1="120" y1="318" x2="168" y2="288">
+        <animate attributeName="opacity" values="0;.7;0" keyTimes="0;.08;.20" dur="5.2s" repeatCount="indefinite"/>
+      </line>
+    </g>
+
+    <!-- vinyl, entering from the bottom-right screen corner like in the app -->
+    <g class="enter">
+      <g class="spin">
+        <circle cx="280" cy="180" r="120" fill="url(#disc)" stroke="#35353e"/>
+        <g fill="none" stroke="#000000" stroke-opacity=".5">
+          <circle cx="280" cy="180" r="58"/>
+          <circle cx="280" cy="180" r="72"/>
+          <circle cx="280" cy="180" r="86"/>
+          <circle cx="280" cy="180" r="100"/>
+          <circle cx="280" cy="180" r="112"/>
+        </g>
+        <g fill="none" stroke="#ffffff" stroke-opacity=".05">
+          <circle cx="280" cy="179" r="59"/>
+          <circle cx="280" cy="179" r="87"/>
+          <circle cx="280" cy="179" r="113"/>
+        </g>
+        <!-- label with the artwork look: amber, darker lower half like the app -->
+        <circle cx="280" cy="180" r="46" fill="#d9a441"/>
+        <path d="M234 180 a46 46 0 0 0 92 0 Z" fill="#000000" fill-opacity=".18"/>
+        <circle cx="280" cy="180" r="44" fill="none" stroke="#b08030"/>
+        <circle cx="280" cy="180" r="7" fill="#141418"/>
+        <!-- small tick so the spin reads -->
+        <line x1="322" y1="158" x2="332" y2="150" stroke="#d9a441" stroke-opacity=".65" stroke-width="4" stroke-linecap="round"/>
+        <line x1="238" y1="202" x2="228" y2="210" stroke="#d9a441" stroke-opacity=".4"  stroke-width="4" stroke-linecap="round"/>
+      </g>
+      <!-- sheen sweep after landing -->
+      <g clip-path="url(#discClip)">
+        <rect class="shine" x="150" y="40" width="90" height="280" fill="url(#band)" transform="rotate(18 280 180)" opacity=".5"/>
+      </g>
+    </g>
+
+    <!-- wordmark -->
+    <text class="word t1" x="430" y="170" font-family="Segoe UI, -apple-system, Helvetica, Arial, sans-serif"
+          font-size="92" font-weight="800" fill="#e9e6df">WA<tspan class="t2">X</tspan></text>
+    <text class="word t3" x="432" y="216" font-family="Segoe UI, -apple-system, Helvetica, Arial, sans-serif"
+          font-size="21" fill="#9b9890">your music, spinning on the desktop</text>
+    <rect class="sweep" x="430" y="238" width="72" height="4" rx="2" fill="#d9a441"/>
+  </g>
+</svg>
