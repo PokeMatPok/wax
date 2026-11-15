@@ -6,16 +6,19 @@ twins for every `*_windows.go` file).
 
 ## Commands
 
-- Build (GUI binary, no console window): `build.cmd` or
-  `go build -ldflags "-s -w -H=windowsgui" -o ytm-client.exe .`
-  The ldflags are required for releases; without `-H=windowsgui` a console
-  window appears alongside the app.
-- Vet: `go vet ./...`
+- Build (GUI binary, no console window): `build.cmd` builds BOTH
+  `ytm-client.exe` (ldflags `-s -w -H=windowsgui`) and the SMTC helper
+  `wax-smtc.exe` (`go build -ldflags "-s -w" -o wax-smtc.exe ./cmd/smtc-helper`).
+  The helper must sit next to the main executable at runtime.
+- Vet: `go vet -unsafeptr=false ./...` — the `-unsafeptr=false` is REQUIRED
+  for `cmd/smtc-helper` (its uintptr->unsafe.Pointer COM calls are the
+  standard Go-on-Windows COM pattern and trip the unsafeptr check by design).
 - Tests: `go test ./...` — `internal/ytm`, `internal/extract`,
   `internal/player` and root e2e tests are LIVE (network, bin/mpv needed);
   they skip when dependencies are missing. Allow ~2.5 s for player tests.
 - Deploy while the app runs (user launches it via shortcuts):
-  `taskkill //IM Wax.exe //F` then `cp ytm-client.exe "$LOCALAPPDATA/Programs/Wax/Wax.exe"`
+  `taskkill //IM Wax.exe //F` then copy BOTH `ytm-client.exe` and
+  `wax-smtc.exe` into `$LOCALAPPDATA/Programs/Wax/`
   then `cd "$LOCALAPPDATA/Programs/Wax" && cmd //c "start Wax.exe"`.
 - Child processes (yt-dlp, mpv, taskkill, tray) must never flash a console:
   every `exec.Command` needs `hideChildConsole(cmd)` (SysProcAttr HideWindow
@@ -67,6 +70,20 @@ twins for every `*_windows.go` file).
   outside the disc for click-through, tray icon via Shell_NotifyIcon.
   Geometry: record is pushed toward top/left beyond the 1/4 corner peek;
   hover state also shifts it (see user-approved offsets in main.go).
+- SMTC (Windows media integration) runs OUT-OF-PROCESS by necessity: raw
+  WinRT COM interop inside the gio UI process silently killed the app
+  (exit 0xB00, 0-40 s in, no panic / no WER event / nothing a VEH sees).
+  Layout: `internal/smtc` is a thin client shim with the public API
+  (`Start`, `SetTrack`, `SetPlayback`, ...); `cmd/smtc-helper` holds the
+  COM core and speaks JSON lines over stdio
+  (`{"c":"track"/"cover"/"play"/"pause"/"stop"/"timeline"/"enable"}` in,
+  `{"e":"button","btn":N}` / `{"e":"ready"}` out). The helper exits when
+  stdin closes (app death = no stray process/session); the shim respawns a
+  dead helper (max 3 fast failures) and replays cached state. The helper
+  claims AUMID `Wax`; `HKCU\Software\Classes\AppUserModelId\Wax`
+  (DisplayName + IconUri) makes the flyout show the app name/icon — set
+  during deploy. Linux/macOS port: MPRIS over godbus behind the same shim
+  API (a D-Bus service instead of a helper process).
 - Git Bash (agent shell) mangles backslash device paths and converts
   arguments: MSYS path conversion breaks `\\.\pipe\`, `dir \\.\pipe\`,
   single `/c`-style flags. Use `//` for cmd switches (`taskkill //IM ...`)

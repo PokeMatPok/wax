@@ -22,6 +22,11 @@ Licensed under the [MIT license](LICENSE).
   cover art; spins when playing; hover = scale-up + play/pause glyph +
   title/artist; hover on its left edge = queue deck; auto-hides after an
   idle timeout (configurable); click-through outside the record; tray icon
+- Windows System Media Transport Controls (SMTC): Wax appears in the OS
+  media flyout with title/artist/album + cover, timeline, and working
+  play/pause/next/prev flyout buttons and media keys; runs in an isolated
+  out-of-process integration (`wax-smtc.exe`) so COM faults can never take
+  the UI down (see Architecture; MPRIS port planned for Linux/macOS)
 - Listen history (recorded on actual playback, respects "collect data"
   setting), cover art cache, settings page (clear data, collection toggle,
   record visibility timeout, keyboard reference)
@@ -33,12 +38,15 @@ Licensed under the [MIT license](LICENSE).
 
 ```
 build.cmd          # Windows GUI binary: -ldflags "-s -w -H=windowsgui"
+build.cmd          # also builds the SMTC helper next to it (wax-smtc.exe)
 go run .           # development (console window appears; fine for dev)
 ```
 
-Deployed location: `%LOCALAPPDATA%\Programs\Wax\Wax.exe`.
+Deployed location: `%LOCALAPPDATA%\Programs\Wax\Wax.exe` — the SMTC helper
+`wax-smtc.exe` must sit in the same directory (the app looks it up next to
+its own executable, then on PATH).
 Config + data: `%APPDATA%\ytm-client\` (settings.json, history.json,
-queue in settings.json, vinylwin.log).
+queue in settings.json, vinylwin.log, smtc.log).
 
 `bin/` (gitignored) holds `yt-dlp.exe` and `mpv.exe`; both are also found
 on PATH. The repo was set up with zhongfly/mpv-winbuild.
@@ -59,6 +67,10 @@ internal/vinylwin/       transparent vinyl overlay + tray icon (win32)
 internal/cover/          cover-art fetch + in-memory cache
 internal/history/        listen history store (JSON)
 internal/prefs/          settings store (JSON) incl. persisted queue
+internal/smtc/           SMTC client shim: supervises wax-smtc.exe helper,
+                         JSON-over-stdio, respawn + state replay
+cmd/smtc-helper/         the helper itself: raw WinRT/COM SMTC interop,
+                         isolated so COM faults never take the UI down
 icongen (../icongen)     generates assets/icon.ico; embedded via
                          rsrc_windows_amd64.syso at the repo root
 ```
