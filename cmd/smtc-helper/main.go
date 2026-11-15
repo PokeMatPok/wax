@@ -80,20 +80,20 @@ func parseGUID(s string) guid {
 // IIDs verified against Windows SDK 10.0.26100.0 headers (SystemMediaTransportControlsInterop.h),
 // the C++/WinRT implementation headers, and .NET reflection over the projected types.
 var (
-	iidSMTC        = parseGUID("99FA3FF4-1742-42A6-902E-087D41F965EC") // ISystemMediaTransportControls
-	iidSMTC2       = parseGUID("EA98D2F6-7F3C-4AF2-A586-72889808EFB1") // ISystemMediaTransportControls2 (timeline)
-	iidInterop     = parseGUID("DDB0472D-C911-4A1F-86D9-DC3D71A95F5A") // ISystemMediaTransportControlsInterop
-	iidDispUpdater = parseGUID("8ABBC53E-FA55-4ECF-AD8E-C984E5DD1550") // ...DisplayUpdater
-	iidMusicProps  = parseGUID("6BBF0C59-D0A0-4D26-92A0-F978E1D18E7B") // IMusicDisplayProperties
-	iidMusicProps2 = parseGUID("00368462-97D3-44B9-B00F-008AFCEFAF18") // IMusicDisplayProperties2 (album title)
-	iidHandler     = parseGUID("0557E996-7B23-5BAE-AA81-EA0D671143A4") // ITypedEventHandler<SMTC,ButtonPressedEventArgs> pinterface
-	iidRefStatics  = parseGUID("857309DC-3FBF-4E7D-986F-EF3B1A07A964") // IRandomAccessStreamReferenceStatics
-	iidUriFactory  = parseGUID("44A9796F-723E-4FDF-A218-033E75B0C084") // IUriRuntimeClassFactory
-	iidTimeline    = parseGUID("5125316A-C3A2-475B-8507-93534DC88F15") // ISystemMediaTransportControlsTimelineProperties
-	iidActFactory  = parseGUID("00000035-0000-0000-C000-000000000046") // IActivationFactory
-	iidIUnknown    = guid{Data4: [8]byte{0xC0, 0, 0, 0, 0, 0, 0, 0x46}}
-	iidAgile       = parseGUID("94EA2B94-E9CC-49E0-C0FF-EE64CA8F5B90") // IAgileObject (QI-only marker)
-	errNoIface     = uintptr(0x80004002)                               // E_NOINTERFACE
+	iidSMTC               = parseGUID("99FA3FF4-1742-42A6-902E-087D41F965EC") // ISystemMediaTransportControls
+	iidSMTC2              = parseGUID("EA98D2F6-7F3C-4AF2-A586-72889808EFB1") // ISystemMediaTransportControls2 (timeline)
+	iidInterop            = parseGUID("DDB0472D-C911-4A1F-86D9-DC3D71A95F5A") // ISystemMediaTransportControlsInterop
+	iidDispUpdater        = parseGUID("8ABBC53E-FA55-4ECF-AD8E-C984E5DD1550") // ...DisplayUpdater
+	iidMusicProps         = parseGUID("6BBF0C59-D0A0-4D26-92A0-F978E1D18E7B") // IMusicDisplayProperties
+	iidMusicProps2        = parseGUID("00368462-97D3-44B9-B00F-008AFCEFAF18") // IMusicDisplayProperties2 (album title)
+	iidHandler            = parseGUID("0557E996-7B23-5BAE-AA81-EA0D671143A4") // ITypedEventHandler<SMTC,ButtonPressedEventArgs> pinterface
+	iidStorageFileStatics = parseGUID("5984C710-DAF2-43C8-8BB4-A4D3EACFD03F") // IStorageFileStatics
+	iidTimeline           = parseGUID("5125316A-C3A2-475B-8507-93534DC88F15") // ISystemMediaTransportControlsTimelineProperties
+	iidAsyncInfo          = parseGUID("00000036-0000-0000-C000-000000000046") // IAsyncInfo (QI'd off async ops)
+	iidActFactory         = parseGUID("00000035-0000-0000-C000-000000000046") // IActivationFactory
+	iidIUnknown           = guid{Data4: [8]byte{0xC0, 0, 0, 0, 0, 0, 0, 0x46}}
+	iidAgile              = parseGUID("94EA2B94-E9CC-49E0-C0FF-EE64CA8F5B90") // IAgileObject (QI-only marker)
+	errNoIface            = uintptr(0x80004002)                               // E_NOINTERFACE
 )
 
 var (
@@ -102,6 +102,8 @@ var (
 	procRoGetFactory    = combase.NewProc("RoGetActivationFactory")
 	procCreateString    = combase.NewProc("WindowsCreateString")
 	procDeleteString    = combase.NewProc("WindowsDeleteString")
+	procGetStrLen       = combase.NewProc("WindowsGetStringLen")
+	procGetStrBuf       = combase.NewProc("WindowsGetStringRawBuffer")
 	user32              = syscall.NewLazyDLL("user32.dll")
 	procRegisterClassEx = user32.NewProc("RegisterClassExW")
 	procCreateWindowEx  = user32.NewProc("CreateWindowExW")
@@ -135,8 +137,13 @@ func callV(obj uintptr, slot int, args ...uintptr) uintptr {
 	return r
 }
 
-// mkHSTR creates an HSTRING from a Go string (caller frees).
+// mkHSTR creates an HSTRING from a Go string (caller frees). Returns 0 for
+// the empty string — HSTRINGs are nullable and indexing an empty rune slice
+// would panic.
 func mkHSTR(s string) uintptr {
+	if s == "" {
+		return 0
+	}
 	w := utf16.Encode([]rune(s))
 	var h uintptr
 	callProc(procCreateString, uintptr(unsafe.Pointer(&w[0])), uintptr(len(w)), uintptr(unsafe.Pointer(&h)))
@@ -164,8 +171,9 @@ const (
 	smtc2SlotUpdateTimeline = 12
 
 	updSlotTypePut       = 7
-	updSlotThumbnailPut  = 11
+	updSlotThumbnailGet  = 10
 	updSlotMusicPropsGet = 12
+	updSlotCopyFromFile  = 15
 	updSlotUpdate        = 17
 
 	musicSlotTitlePut  = 7
@@ -173,10 +181,6 @@ const (
 	musicSlotArtistPut = 11
 
 	music2SlotAlbumTitlePut = 7
-
-	uriSlotCreateUri = 6
-
-	refSlotCreateFromUri = 7
 
 	tlSlotActivate = 6 // IActivationFactory::ActivateInstance
 	tlSlotEndPut   = 9
@@ -321,8 +325,7 @@ type smtcState struct {
 	music   uintptr // IMusicDisplayProperties
 	music2  uintptr // IMusicDisplayProperties2 (optional)
 	handler uintptr
-	uriFac  uintptr
-	refFac  uintptr // IRandomAccessStreamReferenceStatics
+	fileFac uintptr // IStorageFileStatics (lazy)
 	tlFac   uintptr // ActivationFactory for TimelineProperties
 
 	tasks chan func()
@@ -355,6 +358,9 @@ func (st *smtcState) putInt(obj uintptr, slot int, v int32) {
 
 func (st *smtcState) putStr(obj uintptr, slot int, s string) (ok bool) {
 	h := mkHSTR(s)
+	if h == 0 {
+		return true // empty string: nothing to set
+	}
 	defer dropHSTR(h)
 	r, _, _ := syscall.SyscallN(vt(obj)[slot], obj, h)
 	if r != 0 {
@@ -448,8 +454,6 @@ func (st *smtcState) setup(onButton func(Button)) bool {
 	st.putBool(st.smtc, smtcSlotIsNextPut, true)
 	st.putInt(st.smtc, smtcSlotPlaybackStatusPut, statusStopped)
 
-	st.uriFac = factoryOf("Windows.Foundation.Uri", &iidUriFactory)
-	st.refFac = factoryOf("Windows.Storage.Streams.RandomAccessStreamReference", &iidRefStatics)
 	st.tlFac = factoryOf("Windows.Media.SystemMediaTransportControlsTimelineProperties", &iidActFactory)
 
 	st.handler = newHandler(onButton)
@@ -516,33 +520,92 @@ func (st *smtcState) run() {
 
 // ---------------------------------------------------------------- command application
 
-func (st *smtcState) applyThumbnail(coverPath string) {
-	if st.uriFac == 0 || st.refFac == 0 || coverPath == "" || st.updater == 0 {
-		if coverPath != "" {
-			logf("thumb", "factories not ready for %s", coverPath)
+// awaitOp polls an IAsyncOperation/IAsyncAction (IAsyncInfo at slots 6-10,
+// GetResults at 13) to completion and returns its result object (0 on
+// failure). Polling keeps us off the Completed-event callback plumbing.
+// awaitOp waits for an IAsyncOperation/IAsyncAction to complete and returns
+// its result object (0 on failure). WinRT ABI subtlety: IAsyncInfo's methods
+// are NOT part of the operation's vtable — poll via a QueryInterface'd
+// IAsyncInfo; GetResults lives at slot 8 of the operation itself (for
+// IAsyncAction it IS the HRESULT, the extra out-register is ignored).
+func awaitOp(op uintptr, what string) uintptr {
+	var info uintptr
+	if hr, _, _ := syscall.SyscallN(vt(op)[0], op, uintptr(unsafe.Pointer(&iidAsyncInfo)), uintptr(unsafe.Pointer(&info))); hr != 0 || info == 0 {
+		logf("async", "%s QI IAsyncInfo hr=0x%08x", what, hr)
+		return 0
+	}
+	defer callV(info, 10, info) // IAsyncInfo::Close
+	for i := 0; i < 300; i++ {
+		var s int32
+		syscall.SyscallN(vt(info)[7], info, uintptr(unsafe.Pointer(&s))) // get_Status
+		switch s {
+		case 1: // Completed
+			var res uintptr
+			if hr, _, _ := syscall.SyscallN(vt(op)[8], op, uintptr(unsafe.Pointer(&res))); hr != 0 {
+				logf("async", "%s results hr=0x%08x", what, hr)
+				return 0
+			}
+			return res
+		case 2, 3: // Canceled / Error
+			logf("async", "%s status=%d", what, s)
+			return 0
 		}
+		time.Sleep(10 * time.Millisecond)
+	}
+	logf("async", "%s timeout", what)
+	return 0
+}
+
+// applyThumbnail publishes the cover via CopyFromFile — the documented
+// desktop-app path. A RandomAccessStreamReference built from a file:// URI
+// puts successfully (and even reads back) but never surfaces in the system
+// session, so it is not used.
+func (st *smtcState) applyThumbnail(coverPath string) {
+	if st.updater == 0 || coverPath == "" {
 		return
 	}
-	uriH := mkHSTR("file:///" + filepath.ToSlash(coverPath))
-	defer dropHSTR(uriH)
-	var uri uintptr
-	if hr, _, _ := syscall.SyscallN(vt(st.uriFac)[uriSlotCreateUri], st.uriFac, uriH, uintptr(unsafe.Pointer(&uri))); hr != 0 {
-		logf("create-uri", "hr=0x%08x", hr)
+	if st.fileFac == 0 {
+		st.fileFac = factoryOf("Windows.Storage.StorageFile", &iidStorageFileStatics)
+	}
+	if st.fileFac == 0 {
+		logf("thumb", "no StorageFile factory for %s", coverPath)
 		return
 	}
-	defer callV(uri, 2, uri)
-	var ref uintptr
-	if hr, _, _ := syscall.SyscallN(vt(st.refFac)[refSlotCreateFromUri], st.refFac, uri, uintptr(unsafe.Pointer(&ref))); hr != 0 {
-		logf("create-ref", "hr=0x%08x", hr)
+	pathH := mkHSTR(coverPath)
+	defer dropHSTR(pathH)
+	var op uintptr
+	if hr, _, _ := syscall.SyscallN(vt(st.fileFac)[6], st.fileFac, pathH, uintptr(unsafe.Pointer(&op))); hr != 0 {
+		logf("getfile", "hr=0x%08x", hr)
 		return
 	}
-	defer callV(ref, 2, ref)
-	if hr, _, _ := syscall.SyscallN(vt(st.updater)[updSlotThumbnailPut], st.updater, ref); hr != 0 {
-		logf("put-thumb", "hr=0x%08x", hr)
+	file := awaitOp(op, "GetFileFromPath")
+	if file == 0 {
+		return
+	}
+	defer callV(file, 2, file)
+	var action uintptr
+	if hr, _, _ := syscall.SyscallN(vt(st.updater)[updSlotCopyFromFile], st.updater, 1, file, uintptr(unsafe.Pointer(&action))); hr != 0 {
+		logf("copyfromfile", "hr=0x%08x", hr)
+		return
+	}
+	awaitOp(action, "CopyFromFile")
+	callV(st.updater, updSlotUpdate)
+	// readback: confirm the property actually took
+	var back uintptr
+	if hr, _, _ := syscall.SyscallN(vt(st.updater)[updSlotThumbnailGet], st.updater, uintptr(unsafe.Pointer(&back))); hr != 0 {
+		logf("get-thumb", "hr=0x%08x", hr)
+	} else {
+		logf("thumb", "copyfromfile ok, readback=0x%x (%s)", back, coverPath)
+		if back != 0 {
+			callV(back, 2, back)
+		}
 	}
 }
 
 func (st *smtcState) track(title, artist, album, coverPath string) {
+	// Thumbnail FIRST: CopyFromFileAsync clears previously set text
+	// metadata, so the title/artist puts must come after it.
+	st.applyThumbnail(coverPath)
 	if st.music != 0 {
 		st.putStr(st.music, musicSlotTitlePut, title)
 		if st.music2 != 0 {
@@ -552,7 +615,6 @@ func (st *smtcState) track(title, artist, album, coverPath string) {
 		}
 		st.putStr(st.music, musicSlotArtistPut, artist)
 	}
-	st.applyThumbnail(coverPath)
 	if st.updater != 0 {
 		callV(st.updater, updSlotUpdate)
 	}
@@ -588,11 +650,11 @@ func (st *smtcState) timeline(pos, dur time.Duration) {
 		return
 	}
 	defer callV(tl, 2, tl)
-	syscall.SyscallN(vt(tl)[7], tl, uintptr(0))          // StartTime
-	syscall.SyscallN(vt(tl)[tlSlotEndPut], tl, durT)     // EndTime
-	syscall.SyscallN(vt(tl)[11], tl, uintptr(0))         // MinSeekTime
-	syscall.SyscallN(vt(tl)[tlSlotMaxPut], tl, durT)     // MaxSeekTime
-	syscall.SyscallN(vt(tl)[tlSlotPosPut], tl, posT)     // Position
+	syscall.SyscallN(vt(tl)[7], tl, uintptr(0))      // StartTime
+	syscall.SyscallN(vt(tl)[tlSlotEndPut], tl, durT) // EndTime
+	syscall.SyscallN(vt(tl)[11], tl, uintptr(0))     // MinSeekTime
+	syscall.SyscallN(vt(tl)[tlSlotMaxPut], tl, durT) // MaxSeekTime
+	syscall.SyscallN(vt(tl)[tlSlotPosPut], tl, posT) // Position
 	if hr, _, _ := syscall.SyscallN(vt(st.smtc2)[smtc2SlotUpdateTimeline], st.smtc2, inst); hr != 0 {
 		logf("timeline", "hr=0x%08x", hr)
 	}
