@@ -84,6 +84,19 @@ twins for every `*_windows.go` file).
   (DisplayName + IconUri) makes the flyout show the app name/icon — set
   during deploy. Linux/macOS port: MPRIS over godbus behind the same shim
   API (a D-Bus service instead of a helper process).
+- WinRT async ABI trap (cost hours): `IAsyncOperation`/`IAsyncAction` do
+  NOT embed `IAsyncInfo`'s methods in their vtable. Polling `get_Status`
+  at the operation's slot 7 actually calls `getCompleted` (operations look
+  stuck at Started forever); slot 13 reads past the vtable and crashes.
+  Correct: QI the operation for `IID_IAsyncInfo`
+  (00000036-0000-0000-C000-000000000046) and poll slot 7 there;
+  `GetResults` is slot 8 of the operation itself.
+- SMTC thumbnail: build the reference via `StorageFile.GetFileFromPathAsync`
+  + `CopyFromFileAsync` (documented desktop path). A
+  `RandomAccessStreamReference` from a `file://` URI puts and reads back
+  fine but never surfaces in the system session. Also,
+  `CopyFromFileAsync` CLEARS previously set text metadata — apply the
+  thumbnail before title/artist/album (see `track()` ordering).
 - Git Bash (agent shell) mangles backslash device paths and converts
   arguments: MSYS path conversion breaks `\\.\pipe\`, `dir \\.\pipe\`,
   single `/c`-style flags. Use `//` for cmd switches (`taskkill //IM ...`)
