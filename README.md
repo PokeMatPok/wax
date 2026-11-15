@@ -9,15 +9,6 @@ a screen-corner record that spins while music plays.
 
 Licensed under the [MIT license](LICENSE).
 
-## The look
-
-Stylized concept of the UI — search, queue, synced lyrics and the
-screen-corner vinyl (animated SVG, no footage of real covers):
-
-<p align="center">
-  <img src="assets/readme/demo.svg" alt="Wax concept — player, queue, lyrics and the corner vinyl" width="720"/>
-</p>
-
 ## Current state
 
 - Search (YouTube Music InnerTube, client `WEB_REMIX`, no API key)
